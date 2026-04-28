@@ -1,0 +1,62 @@
+//@version=5
+indicator(title="UT Bot Alerts + Profit/Loss %", shorttitle="UT Bot P/L", overlay=true, max_labels_count=500)
+
+// ==================== INPUTS ====================
+a     = input.float(2.0,  title="Key Value (Sensitivity)", minval=0.1, step=0.1)
+c     = input.int(200,    title="ATR Period", minval=1)
+useHA = input.bool(false, title="Use Heikin Ashi Candles")
+
+// ==================== CÁLCULOS ====================
+xATR  = ta.atr(c)
+nLoss = a * xATR
+
+// === CORRECCIÓN HEIKIN ASHI ===
+haTicker = ticker.heikinashi(syminfo.tickerid)
+src = useHA ? request.security(haTicker, timeframe.period, close, lookahead = barmerge.lookahead_off) : close
+
+// Trailing Stop Logic
+var float xATRTrailingStop = na
+
+xATRTrailingStop := na(xATRTrailingStop[1]) ? src :
+     src > xATRTrailingStop[1] and src[1] > xATRTrailingStop[1] ? math.max(xATRTrailingStop[1], src - nLoss) :
+     src < xATRTrailingStop[1] and src[1] < xATRTrailingStop[1] ? math.min(xATRTrailingStop[1], src + nLoss) :
+     src > xATRTrailingStop[1] ? src - nLoss : src + nLoss
+
+// Posición
+var int pos = 0
+pos := src[1] < xATRTrailingStop[1] and src > xATRTrailingStop[1] ? 1 :
+       src[1] > xATRTrailingStop[1] and src < xATRTrailingStop[1] ? -1 : pos[1]
+
+// Señales
+buy  = ta.crossover(src, xATRTrailingStop) and pos == 1
+sell = ta.crossunder(src, xATRTrailingStop) and pos == -1
+
+// ==================== PROFIT/LOSS % ====================
+var float entryPrice = na
+
+if buy
+    entryPrice := src
+
+if sell and not na(entryPrice)
+    profitPercent = (src - entryPrice) / entryPrice * 100
+    labelText = profitPercent >= 0 ? "✓ +" + str.tostring(profitPercent, "#.##") + "%" : "✗ " + str.tostring(profitPercent, "#.##") + "%"
+    
+    // Label en una sola línea
+    lastLabel = label.new(bar_index, src, text=labelText, 
+                          style=profitPercent >= 0 ? label.style_label_up : label.style_label_down, 
+                          color=profitPercent >= 0 ? color.new(color.green, 0) : color.new(color.red, 0), 
+                          textcolor=color.white, 
+                          size=size.normal, 
+                          yloc=profitPercent >= 0 ? yloc.belowbar : yloc.abovebar)
+
+// ==================== VISUALIZACIÓN ====================
+plot(xATRTrailingStop, title="UT Trailing Stop", color=color.blue, linewidth=2)
+
+plotshape(buy,  title="Buy",  text="BUY",  style=shape.labelup,   location=location.belowbar, color=color.green, textcolor=color.white, size=size.small)
+plotshape(sell, title="Sell", text="SELL", style=shape.labeldown, location=location.abovebar, color=color.red,   textcolor=color.white, size=size.small)
+
+barcolor(buy ? color.new(color.green, 80) : sell ? color.new(color.red, 80) : na)
+
+// Alertas
+alertcondition(buy,  title="UT Bot - Long",  message="UT Bot: BUY Signal")
+alertcondition(sell, title="UT Bot - Close", message="UT Bot: SELL Signal (Close Position)")
