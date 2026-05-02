@@ -1,0 +1,111 @@
+//@version=5
+indicator(title="UT Bot Alerts + Profit/Loss % + Trend Filter", shorttitle="UT Bot P/L Trend", overlay=true, max_labels_count=500)
+
+// ==================== INPUTS ====================
+a     = input.float(2.0,  title="Key Value (Sensitivity)", minval=0.1, step=0.1)
+c     = input.int(200,    title="ATR Period", minval=1)
+useHA = input.bool(false, title="Use Heikin Ashi Candles")
+
+emaSlowLen = input.int(200,   title="EMA Tendencia Principal", group="Filtro de Tendencia", minval=1)
+showEMA    = input.bool(true, title="Mostrar EMA 200",         group="Filtro de Tendencia")
+showTable  = input.bool(true, title="Mostrar Tabla",           group="Filtro de Tendencia")
+
+// ==================== CÁLCULOS ====================
+xATR  = ta.atr(c)
+nLoss = a * xATR
+
+haTicker = ticker.heikinashi(syminfo.tickerid)
+src = useHA ? request.security(haTicker, timeframe.period, close, lookahead=barmerge.lookahead_off) : close
+
+var float xATRTrailingStop = na
+xATRTrailingStop := na(xATRTrailingStop[1]) ? src : src > xATRTrailingStop[1] and src[1] > xATRTrailingStop[1] ? math.max(xATRTrailingStop[1], src - nLoss) : src < xATRTrailingStop[1] and src[1] < xATRTrailingStop[1] ? math.min(xATRTrailingStop[1], src + nLoss) : src > xATRTrailingStop[1] ? src - nLoss : src + nLoss
+
+var int pos = 0
+pos := src[1] < xATRTrailingStop[1] and src > xATRTrailingStop[1] ? 1 : src[1] > xATRTrailingStop[1] and src < xATRTrailingStop[1] ? -1 : pos[1]
+
+// ==================== FILTRO DE TENDENCIA ====================
+// EMA 200 como referencia de tendencia macro (~33 días en 4h)
+// Si el precio está por encima → mercado en territorio alcista
+// Si el precio está por debajo → mercado claramente bajista → bloquear BUY
+ema200 = ta.ema(src, emaSlowLen)
+
+marketBullish = src > ema200  // mercado sobre tendencia macro → BUY permitido
+marketBearish = src < ema200  // mercado bajo tendencia macro  → BUY bloqueado
+
+// Distancia porcentual del precio a la EMA 200
+// Útil para saber cuán lejos estamos de la zona de peligro
+distToEma = (src - ema200) / ema200 * 100
+
+// ==================== SEÑALES CON FILTRO DURO ====================
+// BUY  → solo si el precio está por encima de la EMA 200 (mercado alcista macro)
+//         si el precio está bajo la EMA 200 la señal se ignora completamente
+// SELL → siempre se ejecuta independientemente de la tendencia
+//         si estás en posición y el mercado gira, salimos igual
+buy  = ta.crossover(src,  xATRTrailingStop) and pos ==  1 and marketBullish
+sell = ta.crossunder(src, xATRTrailingStop) and pos == -1
+
+// ==================== PROFIT/LOSS % ====================
+var float entryPrice = na
+
+if buy
+    entryPrice := src
+
+if sell and not na(entryPrice)
+    profitPercent = (src - entryPrice) / entryPrice * 100
+    labelText     = profitPercent >= 0 ? "✓ +" + str.tostring(profitPercent, "#.##") + "%" : "✗ " + str.tostring(profitPercent, "#.##") + "%"
+    label.new(bar_index, src, text=labelText, style=profitPercent >= 0 ? label.style_label_up : label.style_label_down, color=profitPercent >= 0 ? color.new(color.green, 0) : color.new(color.red, 0), textcolor=color.white, size=size.normal, yloc=profitPercent >= 0 ? yloc.belowbar : yloc.abovebar)
+
+// ==================== VISUALIZACIÓN ====================
+
+// Trailing Stop coloreado según posición respecto a EMA 200
+trailColor = marketBullish ? color.new(color.green, 0) : color.new(color.red, 0)
+plot(xATRTrailingStop, title="UT Trailing Stop", color=trailColor, linewidth=2)
+
+// EMA 200 — referencia de tendencia macro
+plot(showEMA ? ema200 : na, title="EMA 200", color=color.new(color.white, 0), linewidth=2)
+
+// Relleno entre precio y EMA 200 para visualizar zona alcista/bajista
+pricePlot = plot(src,                    display=display.none)
+emaPlot   = plot(showEMA ? ema200 : na,  display=display.none)
+fill(pricePlot, emaPlot, color=marketBullish ? color.new(color.green, 90) : color.new(color.red, 90), title="Zona tendencia macro")
+
+// BUY bloqueado — mostrar señal atenuada cuando el filtro bloquea una entrada
+// Útil para ver cuántas señales se están filtrando en zona bajista
+buyBlocked = ta.crossover(src, xATRTrailingStop) and pos == 1 and marketBearish
+plotshape(buyBlocked, title="Buy Bloqueado", text="✗", style=shape.labelup, location=location.belowbar, color=color.new(color.gray, 50), textcolor=color.white, size=size.tiny)
+
+plotshape(buy,  title="Buy",  text="BUY",  style=shape.labelup,   location=location.belowbar, color=color.green, textcolor=color.white, size=size.small)
+plotshape(sell, title="Sell", text="SELL", style=shape.labeldown, location=location.abovebar, color=color.red,   textcolor=color.white, size=size.small)
+
+barcolor(buy ? color.new(color.green, 80) : sell ? color.new(color.red, 80) : na)
+
+// ==================== TABLA DE TENDENCIA ====================
+if showTable and barstate.islast
+    var table trendTable = table.new(position=position.top_right, columns=2, rows=4, bgcolor=color.new(color.black, 70), border_width=1, border_color=color.new(color.gray, 50))
+
+    table.cell(trendTable, 0, 0, "INDICADOR",     text_color=color.white, text_size=size.small, bgcolor=color.new(color.black, 50))
+    table.cell(trendTable, 1, 0, "ESTADO",         text_color=color.white, text_size=size.small, bgcolor=color.new(color.black, 50))
+
+    // Tendencia macro
+    macroText  = marketBullish ? "▲ ALCISTA" : "▼ BAJISTA"
+    macroColor = marketBullish ? color.new(color.green, 0) : color.new(color.red, 0)
+    macroBg    = marketBullish ? color.new(color.green, 20) : color.new(color.red, 20)
+    table.cell(trendTable, 0, 1, "Tendencia Macro", text_color=color.white, text_size=size.small, bgcolor=color.new(color.black, 70))
+    table.cell(trendTable, 1, 1, macroText,          text_color=macroColor,  text_size=size.small, bgcolor=macroBg)
+
+    // Estado del filtro BUY
+    filterText  = marketBullish ? "✓ Permitido" : "✗ Bloqueado"
+    filterColor = marketBullish ? color.new(color.green, 0) : color.new(color.red, 0)
+    filterBg    = marketBullish ? color.new(color.green, 20) : color.new(color.red, 20)
+    table.cell(trendTable, 0, 2, "Filtro BUY",  text_color=color.white, text_size=size.small, bgcolor=color.new(color.black, 70))
+    table.cell(trendTable, 1, 2, filterText,     text_color=filterColor, text_size=size.small, bgcolor=filterBg)
+
+    // Distancia a la EMA 200 en %
+    distText  = str.tostring(distToEma, "#.##") + "%"
+    distColor = distToEma >= 0 ? color.new(color.green, 0) : color.new(color.red, 0)
+    table.cell(trendTable, 0, 3, "Dist. EMA 200", text_color=color.white, text_size=size.small, bgcolor=color.new(color.black, 70))
+    table.cell(trendTable, 1, 3, distText,          text_color=distColor,   text_size=size.small, bgcolor=color.new(color.black, 70))
+
+// ==================== ALERTAS ====================
+alertcondition(buy,  title="UT Bot - Long",  message="UT Bot: BUY Signal")
+alertcondition(sell, title="UT Bot - Close", message="UT Bot: SELL Signal (Close Position)")
