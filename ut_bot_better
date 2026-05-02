@@ -1,0 +1,78 @@
+//@version=5
+indicator(title="UT Bot EMA Cross + Danger Zone", shorttitle="UT Bot P/L Trend", overlay=true, max_labels_count=500)
+a = input.float(2.0, title="Key Value (Sensitivity)", minval=0.1, step=0.1)
+c = input.int(200, title="ATR Period", minval=1)
+useHA = input.bool(false, title="Use Heikin Ashi Candles")
+emaSlowLen = input.int(200, title="EMA Tendencia Principal", group="Filtro de Tendencia", minval=1)
+showEMA = input.bool(true, title="Mostrar EMA 200", group="Filtro de Tendencia")
+showTable = input.bool(true, title="Mostrar Tabla", group="Filtro de Tendencia")
+rsiLen = input.int(14, title="RSI Longitud", group="Danger Zone", minval=1)
+rsiOverbought = input.float(75, title="RSI Sobrecompra (umbral)", group="Danger Zone", minval=50, maxval=100)
+emaDistThresh = input.float(25, title="Distancia EMA 200 % (umbral)", group="Danger Zone", minval=5, maxval=100)
+showDangerZone = input.bool(true, title="Mostrar Danger Zone", group="Danger Zone")
+haTicker = ticker.heikinashi(syminfo.tickerid)
+src = useHA ? request.security(haTicker, timeframe.period, close, lookahead=barmerge.lookahead_off) : close
+ema200 = ta.ema(src, emaSlowLen)
+marketBullish = src > ema200
+marketBearish = src < ema200
+distToEma = (src - ema200) / ema200 * 100
+xATR = ta.atr(c)
+nLoss = a * xATR
+var float xATRTrailingStop = na
+xATRTrailingStop := na(xATRTrailingStop[1]) ? src : src > xATRTrailingStop[1] and src[1] > xATRTrailingStop[1] ? math.max(xATRTrailingStop[1], src - nLoss) : src < xATRTrailingStop[1] and src[1] < xATRTrailingStop[1] ? math.min(xATRTrailingStop[1], src + nLoss) : src > xATRTrailingStop[1] ? src - nLoss : src + nLoss
+buySignal = ta.crossover(src, ema200)
+sellSignal = ta.crossunder(src, ema200)
+var float entryPrice = na
+if buySignal
+    entryPrice := src
+if sellSignal and not na(entryPrice)
+    profitPercent = (src - entryPrice) / entryPrice * 100
+    labelText = profitPercent >= 0 ? "✓ +" + str.tostring(profitPercent, "#.##") + "%" : "✗ " + str.tostring(profitPercent, "#.##") + "%"
+    label.new(bar_index, src, text=labelText, style=profitPercent >= 0 ? label.style_label_up : label.style_label_down, color=profitPercent >= 0 ? color.new(color.green, 0) : color.new(color.red, 0), textcolor=color.white, size=size.normal, yloc=profitPercent >= 0 ? yloc.belowbar : yloc.abovebar)
+    entryPrice := na
+rsi = ta.rsi(src, rsiLen)
+priceHigher = src > src[1] and src[1] > src[2]
+rsiLower = rsi < rsi[1] and rsi[1] > rsi[2]
+bearDivergence = priceHigher and rsiLower
+rsiOverboughtCond = rsi >= rsiOverbought
+emaOverextended = distToEma >= emaDistThresh
+dangerZone = rsiOverboughtCond and emaOverextended
+dangerZoneStrong = dangerZone and bearDivergence
+bgcolor(showDangerZone and dangerZoneStrong ? color.new(color.red, 60) : na, title="Danger Zone Fuerte")
+bgcolor(showDangerZone and dangerZone and not dangerZoneStrong ? color.new(color.orange, 75) : na, title="Danger Zone Moderada")
+trailColor = marketBullish ? color.new(color.green, 0) : color.new(color.red, 0)
+plot(xATRTrailingStop, title="UT Trailing Stop", color=trailColor, linewidth=2)
+plot(showEMA ? ema200 : na, title="EMA 200", color=color.new(color.white, 0), linewidth=2)
+pricePlot = plot(src, display=display.none)
+emaPlot = plot(showEMA ? ema200 : na, display=display.none)
+fill(pricePlot, emaPlot, color=marketBullish ? color.new(color.green, 90) : color.new(color.red, 90), title="Zona tendencia macro")
+plotshape(buySignal, title="Buy EMA", text="BUY", style=shape.labelup, location=location.belowbar, color=color.green, textcolor=color.white, size=size.small)
+plotshape(sellSignal, title="Sell EMA", text="SELL", style=shape.labeldown, location=location.abovebar, color=color.red, textcolor=color.white, size=size.small)
+barcolor(buySignal ? color.new(color.green, 80) : sellSignal ? color.new(color.red, 80) : na)
+if showTable and barstate.islast
+    var table trendTable = table.new(position=position.top_right, columns=2, rows=5, bgcolor=color.new(color.black, 70), border_width=1, border_color=color.new(color.gray, 50))
+    table.cell(trendTable, 0, 0, "INDICADOR", text_color=color.white, text_size=size.small, bgcolor=color.new(color.black, 50))
+    table.cell(trendTable, 1, 0, "ESTADO", text_color=color.white, text_size=size.small, bgcolor=color.new(color.black, 50))
+    macroText = marketBullish ? "▲ ALCISTA" : "▼ BAJISTA"
+    macroColor = marketBullish ? color.new(color.green, 0) : color.new(color.red, 0)
+    macroBg = marketBullish ? color.new(color.green, 20) : color.new(color.red, 20)
+    table.cell(trendTable, 0, 1, "Tendencia Macro", text_color=color.white, text_size=size.small, bgcolor=color.new(color.black, 70))
+    table.cell(trendTable, 1, 1, macroText, text_color=macroColor, text_size=size.small, bgcolor=macroBg)
+    filterText = marketBullish ? "✓ Permitido" : "✗ Bloqueado"
+    filterColor = marketBullish ? color.new(color.green, 0) : color.new(color.red, 0)
+    filterBg = marketBullish ? color.new(color.green, 20) : color.new(color.red, 20)
+    table.cell(trendTable, 0, 2, "Filtro BUY", text_color=color.white, text_size=size.small, bgcolor=color.new(color.black, 70))
+    table.cell(trendTable, 1, 2, filterText, text_color=filterColor, text_size=size.small, bgcolor=filterBg)
+    distText = str.tostring(distToEma, "#.##") + "%"
+    distColor = distToEma >= 0 ? color.new(color.green, 0) : color.new(color.red, 0)
+    table.cell(trendTable, 0, 3, "Dist. EMA 200", text_color=color.white, text_size=size.small, bgcolor=color.new(color.black, 70))
+    table.cell(trendTable, 1, 3, distText, text_color=distColor, text_size=size.small, bgcolor=color.new(color.black, 70))
+    dangerText = dangerZoneStrong ? "🔴 PELIGRO MAX" : dangerZone ? "🟠 PRECAUCIÓN" : "✓ Normal"
+    dangerColor = dangerZoneStrong ? color.new(color.red, 0) : dangerZone ? color.new(color.orange, 0) : color.new(color.green, 0)
+    dangerBg = dangerZoneStrong ? color.new(color.red, 20) : dangerZone ? color.new(color.orange, 20) : color.new(color.black, 70)
+    table.cell(trendTable, 0, 4, "Danger Zone", text_color=color.white, text_size=size.small, bgcolor=color.new(color.black, 70))
+    table.cell(trendTable, 1, 4, dangerText, text_color=dangerColor, text_size=size.small, bgcolor=dangerBg)
+alertcondition(buySignal, title="EMA Cross - BUY", message="UT Bot: BUY — Precio cruza EMA 200 al alza")
+alertcondition(sellSignal, title="EMA Cross - SELL", message="UT Bot: SELL — Precio cruza EMA 200 a la baja")
+alertcondition(dangerZone, title="Danger Zone - Precaución", message="UT Bot: PRECAUCIÓN — RSI sobrecomprado + sobreextensión EMA")
+alertcondition(dangerZoneStrong, title="Danger Zone - Peligro Máx", message="UT Bot: PELIGRO MÁXIMO — Divergencia bajista + sobreextensión")
